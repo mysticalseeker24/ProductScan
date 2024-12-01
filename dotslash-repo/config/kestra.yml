@@ -1,0 +1,51 @@
+kestra:
+  repository:
+    type: postgres
+    postgres:
+      url: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-kestra}
+      username: ${POSTGRES_USER:-kestra}
+      password: ${POSTGRES_PASSWORD:-changeme}
+      
+  queue:
+    type: postgres
+    
+  storage:
+    type: local
+    local:
+      base-path: "/tmp/kestra/storage"
+      
+  url: http://localhost:8080
+  
+  server:
+    port: 8080
+    workers: 2
+    
+  tasks:
+    scripts:
+      python:
+        virtual-env:
+          enabled: true
+          packages:
+            - google-generativeai
+            - pillow
+            - requests
+      shell:
+        runner: PROCESS
+    
+  metrics:
+    enabled: true
+    prefix: kestra
+    
+  logging:
+    level:
+      root: INFO
+      org.kestra: DEBUG
+    file:
+      enabled: true
+      path: /var/log/kestra/kestra.log
+      
+  security:
+    basic:
+      enabled: true
+      username: admin
+      password: ${KESTRA_ADMIN_PASSWORD:-changeme}

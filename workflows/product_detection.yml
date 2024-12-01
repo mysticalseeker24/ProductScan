@@ -1,0 +1,117 @@
+id: product-detection-workflow
+namespace: product
+name: Product Detection Pipeline
+
+variables:
+  api_base_url: ${API_BASE_URL:-http://localhost:5000}
+  upload_dir: ${UPLOAD_DIR:-/tmp/kestra/uploads}
+  results_dir: ${RESULTS_DIR:-/tmp/kestra/results}
+
+tasks:
+  - id: setup_directories
+    type: io.kestra.core.tasks.scripts.Shell
+    script: |
+      mkdir -p ${upload_dir}
+      mkdir -p ${results_dir}
+
+  - id: image_segmentation
+    type: io.kestra.core.tasks.scripts.Shell
+    depends:
+      - setup_directories
+    inputFiles:
+      source_image: "{{ inputs.image_path }}"
+    env:
+      IMAGE_PATH: "{{ inputs.image_path }}"
+      RESULTS_DIR: "{{ variables.results_dir }}"
+      API_URL: "{{ variables.api_base_url }}/detect_products"
+    script: |
+      # Copy input image to working directory
+      cp ${IMAGE_PATH} ${RESULTS_DIR}/
+      
+      # Send image to Flask API for YOLOv11nano segmentation
+      curl -X POST \
+        -F "image=@${IMAGE_PATH}" \
+        ${API_URL} \
+        -o ${RESULTS_DIR}/segmentation_result.json
+      
+      # Extract and save cropped image paths
+      jq -r '.cropped_images[]' ${RESULTS_DIR}/segmentation_result.json > ${RESULTS_DIR}/cropped_images.txt
+
+  - id: product_recognition
+    type: io.kestra.core.tasks.scripts.Python
+    depends:
+      - image_segmentation
+    env:
+      GEMINI_API_KEY: "{{ inputs.gemini_api_key }}"
+      RESULTS_DIR: "{{ variables.results_dir }}"
+    script: |
+      import os
+      import json
+      import google.generativeai as genai
+      from PIL import Image
+
+      # Initialize Gemini
+      genai.configure(api_key=os.environ['GEMINI_API_KEY'])
+      model = genai.GenerativeModel('gemini-1.5-flash-8b')
+
+      # Process images and get product names
+      results = []
+      with open(os.path.join(os.environ['RESULTS_DIR'], 'cropped_images.txt')) as f:
+          image_paths = f.readlines()
+      
+      for path in image_paths:
+          path = path.strip()
+          if os.path.exists(path):
+              image = Image.open(path)
+              response = model.generate_content([image])
+              results.append({
+                  'image_path': path,
+                  'product_name': response.text.strip()
+              })
+
+      # Save results
+      with open(os.path.join(os.environ['RESULTS_DIR'], 'product_names.json'), 'w') as f:
+          json.dump({'products': results}, f, indent=2)
+
+  - id: cleanup
+    type: io.kestra.core.tasks.scripts.Shell
+    depends:
+      - product_recognition
+    env:
+      RESULTS_DIR: "{{ variables.results_dir }}"
+    script: |
+      # Archive results
+      tar -czf ${RESULTS_DIR}/workflow_results.tar.gz \
+        ${RESULTS_DIR}/segmentation_result.json \
+        ${RESULTS_DIR}/product_names.json \
+        ${RESULTS_DIR}/cropped_images.txt
+      
+      # Cleanup temporary files
+      rm -f ${RESULTS_DIR}/segmentation_result.json
+      rm -f ${RESULTS_DIR}/cropped_images.txt
+      
+      echo "Results archived to workflow_results.tar.gz"
+
+inputs:
+  - name: image_path
+    type: string
+    required: true
+    description: "Path to the input image file"
+  - name: gemini_api_key
+    type: string
+    required: true
+    description: "API key for Google's Gemini API"
+
+outputs:
+  - name: segmentation_result
+    type: FILE
+    value: "{{ variables.results_dir }}/segmentation_result.json"
+    description: "JSON file containing segmentation results"
+  - name: recognition_results
+    type: FILE
+    value: "{{ variables.results_dir }}/product_names.json"
+    description: "JSON file containing product recognition results"
+  - name: archived_results
+    type: FILE
+    value: "{{ variables.results_dir }}/workflow_results.tar.gz"
+    description: "Archive containing all workflow results"

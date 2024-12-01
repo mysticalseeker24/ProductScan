@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:14
+    container_name: kestra-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kestra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-kestra}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kestra}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kestra:
+    image: kestra/kestra:latest
+    container_name: kestra
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      KESTRA_CONFIGURATION: /app/config/kestra.yml
+      KESTRA_ADMIN_PASSWORD: ${KESTRA_ADMIN_PASSWORD:-changeme}
+    volumes:
+      - ./dotslash-repo/config:/app/config
+      - kestra_data:/tmp/kestra
+      - kestra_logs:/var/log/kestra
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  kestra_data:
+  kestra_logs:
